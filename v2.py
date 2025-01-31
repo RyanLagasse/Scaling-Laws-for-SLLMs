@@ -39,12 +39,17 @@ TRAIN_SUBSET_SIZES = [0, 100, 250, 500, 750, 1000]
 data = load_dataset("cais/mmlu", "professional_law")
 
 def compute_accuracy(trainer, eval_dataset):
-    """Computes accuracy by checking predicted answers against ground truth."""
-    predictions = trainer.predict(eval_dataset)
-    pred_ids = predictions.predictions.argmax(-1)
-    correct = sum(pred_ids == eval_dataset["answer"])
-    total = len(eval_dataset)
-    return correct / total
+    """Computes accuracy efficiently without storing full logits."""
+    correct, total = 0, 0
+    for batch in tqdm(eval_dataset, desc="Evaluating", leave=False):
+        inputs = {k: torch.tensor(v).unsqueeze(0).to(trainer.model.device) for k, v in batch.items() if k in ["input_ids", "attention_mask"]}
+        with torch.no_grad():
+            logits = trainer.model(**inputs).logits
+        pred_id = logits.argmax(-1).item()
+        if pred_id == batch["answer"]:
+            correct += 1
+        total += 1
+    return correct / total if total > 0 else 0.0
 
 # Iterate through models and subset sizes
 for model_name in tqdm(MODEL_LIST, desc="Models"):
@@ -93,7 +98,7 @@ for model_name in tqdm(MODEL_LIST, desc="Models"):
             evaluation_strategy="epoch",
             save_strategy="epoch",
             per_device_train_batch_size=4 if "7B" in model_name else 16,
-            per_device_eval_batch_size=4,
+            per_device_eval_batch_size=1,
             gradient_accumulation_steps=4 if "7B" in model_name else 2,
             fp16=torch.cuda.is_bf16_supported() == False,
             bf16=torch.cuda.is_bf16_supported(),
