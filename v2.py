@@ -38,27 +38,37 @@ TRAIN_SUBSET_SIZES = [0, 100, 250, 500, 750, 1000]
 # Load dataset
 data = load_dataset("cais/mmlu", "professional_law")
 
-def compute_accuracy(trainer, eval_dataset):
-    """Computes accuracy efficiently without storing full logits."""
+def compute_accuracy(trainer, eval_dataset, tokenizer, model):
+    """Computes accuracy using multiple-choice log-likelihood ranking."""
     correct, total = 0, 0
-    for batch in tqdm(eval_dataset, desc="Evaluating", leave=False):
-        inputs = {k: torch.tensor(v).unsqueeze(0).to(trainer.model.device) for k, v in batch.items() if k in ["input_ids", "attention_mask"]}
+    for example in tqdm(eval_dataset, desc="Evaluating", leave=False):
+        question = example["question"]
+        choices = example["choices"]
+        correct_answer = example["answer"]
         
-        with torch.no_grad():
-            outputs = trainer.model(**inputs)
-            logits = outputs.logits  # Shape: (batch_size, seq_length, vocab_size)
+        best_choice = None
+        best_score = float("inf")
         
-        # Extract only the logits corresponding to the last token
-        last_token_logits = logits[:, -1, :]  # Shape: (batch_size, vocab_size)
-        pred_id = last_token_logits.argmax(-1).item()  # Get highest probability token
+        for i, choice in enumerate(choices):
+            prompt = f"Question: {question} Answer: {choice}"
+            inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+            
+            with torch.no_grad():
+                outputs = model(**inputs, labels=inputs["input_ids"])
+                loss = outputs.loss.item()
+            
+            if loss < best_score:
+                best_score = loss
+                best_choice = i
         
-        # Compare to the correct answer index
-        if pred_id == batch["answer"]:
+        print(f"Predicted: {best_choice}, Correct: {correct_answer}")
+        if best_choice == correct_answer:
             correct += 1
         total += 1
-
-    return correct / total if total > 0 else 0.0
-
+    
+    accuracy = correct / total if total > 0 else 0.0
+    print(f"Final Accuracy: {accuracy:.3f}")
+    return accuracy
 
 # Iterate through models and subset sizes
 for model_name in tqdm(MODEL_LIST, desc="Models"):
@@ -139,7 +149,7 @@ for model_name in tqdm(MODEL_LIST, desc="Models"):
         start_time = time.time()
         metrics = trainer.evaluate(eval_dataset=eval_set)
         eval_time = time.time() - start_time
-        accuracy = compute_accuracy(trainer, eval_set)
+        accuracy = compute_accuracy(trainer, eval_set, tokenizer, model)
         
         with open(results_file, "a", newline="") as f:
             writer = csv.writer(f)
