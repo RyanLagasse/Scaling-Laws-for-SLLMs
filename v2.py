@@ -43,13 +43,22 @@ def compute_accuracy(trainer, eval_dataset):
     correct, total = 0, 0
     for batch in tqdm(eval_dataset, desc="Evaluating", leave=False):
         inputs = {k: torch.tensor(v).unsqueeze(0).to(trainer.model.device) for k, v in batch.items() if k in ["input_ids", "attention_mask"]}
+        
         with torch.no_grad():
-            logits = trainer.model(**inputs).logits
-        pred_id = logits.argmax(-1).item()
+            outputs = trainer.model(**inputs)
+            logits = outputs.logits  # Shape: (batch_size, seq_length, vocab_size)
+        
+        # Extract only the logits corresponding to the last token
+        last_token_logits = logits[:, -1, :]  # Shape: (batch_size, vocab_size)
+        pred_id = last_token_logits.argmax(-1).item()  # Get highest probability token
+        
+        # Compare to the correct answer index
         if pred_id == batch["answer"]:
             correct += 1
         total += 1
+
     return correct / total if total > 0 else 0.0
+
 
 # Iterate through models and subset sizes
 for model_name in tqdm(MODEL_LIST, desc="Models"):
